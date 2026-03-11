@@ -7,6 +7,11 @@ dependencies = [
   "fastapi",
   "uvicorn[standard]",
   "langchain",
+  "langchain-community",
+  "langchain-openai",
+  "langchain-google-genai",
+  "httpx",
+  "python-dotenv",
   "pydantic>=2",
 ]
 
