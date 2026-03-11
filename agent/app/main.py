@@ -1,13 +1,14 @@
 import asyncio
 import json
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
-from langchain.agents import AgentExecutor, create_react_agent
-from langchain.callbacks.base import BaseCallbackHandler
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.callbacks.base import BaseCallbackHandler
+from langchain_core.messages import SystemMessage
+from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel, Field
 
 from .prompts import SYSTEM_PROMPT
@@ -20,7 +21,9 @@ from .tools import (
 )
 
 
-load_dotenv()
+# Load .env from project root (one level up from /agent)
+load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
+print("GOOGLE_API_KEY found:", bool(os.getenv("GOOGLE_API_KEY")))
 
 
 class AnalyzeRequest(BaseModel):
@@ -71,10 +74,43 @@ class ThinkingTraceHandler(BaseCallbackHandler):
 def _get_llm():
     """Instantiate the underlying chat model based on available environment variables."""
 
-    openai_api_key = os.getenv("OPENAI_API_KEY")
-    google_api_key = os.getenv("GOOGLE_API_KEY")
+    openai_api_key = os.getenv("OPENAI_API_KEY") or ""
+    google_api_key = os.getenv("GOOGLE_API_KEY") or ""
+    groq_api_key = os.getenv("GROQ_API_KEY") or ""
 
-    if openai_api_key:
+    def _is_valid(key: str) -> bool:
+        lowered = key.lower()
+        return bool(key) and "your" not in lowered and "here" not in lowered
+
+    openai_valid = _is_valid(openai_api_key)
+    google_valid = _is_valid(google_api_key)
+    groq_valid = _is_valid(groq_api_key)
+
+    # Prefer a valid Google Generative AI key if available.
+    if google_valid:
+        try:
+            from langchain_google_genai import ChatGoogleGenerativeAI
+        except ImportError as exc:  # noqa: BLE001
+            raise RuntimeError(
+                "GOOGLE_API_KEY is set but langchain-google-genai is not installed."
+            ) from exc
+
+        model_name = os.getenv("GOOGLE_MODEL", "gemini-2.0-flash")
+        return ChatGoogleGenerativeAI(model=model_name, temperature=0)
+
+    # Next, prefer a valid Groq key if available.
+    if groq_valid:
+        try:
+            from langchain_groq import ChatGroq
+        except ImportError as exc:  # noqa: BLE001
+            raise RuntimeError(
+                "GROQ_API_KEY is set but langchain-groq is not installed."
+            ) from exc
+
+        model_name = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+        return ChatGroq(model=model_name, temperature=0)
+
+    if openai_valid:
         try:
             from langchain_openai import ChatOpenAI
         except ImportError as exc:  # noqa: BLE001
@@ -85,24 +121,14 @@ def _get_llm():
         model_name = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
         return ChatOpenAI(model=model_name, temperature=0)
 
-    if google_api_key:
-        try:
-            from langchain_google_genai import ChatGoogleGenerativeAI
-        except ImportError as exc:  # noqa: BLE001
-            raise RuntimeError(
-                "GOOGLE_API_KEY is set but langchain-google-genai is not installed."
-            ) from exc
-
-        model_name = os.getenv("GOOGLE_MODEL", "gemini-1.5-flash")
-        return ChatGoogleGenerativeAI(model=model_name, temperature=0)
-
     raise RuntimeError(
         "No supported LLM configured. "
-        "Set either OPENAI_API_KEY or GOOGLE_API_KEY in the environment."
+        "Provide a valid GOOGLE_API_KEY (preferred) or OPENAI_API_KEY in the environment. "
+        "Keys must not be placeholder values containing 'your' or 'here'."
     )
 
 
-def _build_agent_executor() -> AgentExecutor:
+def _build_graph():
     llm = _get_llm()
 
     tools = [
@@ -113,27 +139,12 @@ def _build_agent_executor() -> AgentExecutor:
         calculate_combat_score,
     ]
 
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", SYSTEM_PROMPT),
-            (
-                "human",
-                (
-                    "Battle analysis query:\n{query}\n\n"
-                    "Commander 1: {commander1}\n"
-                    "Commander 2: {commander2}\n\n"
-                    "Using the available tools, determine who would be more "
-                    "likely to prevail. Remember to always call "
-                    "`calculate_combat_score` before your final verdict and "
-                    "respond ONLY with the final JSON object."
-                ),
-            ),
-        ]
+    graph = create_react_agent(
+        model=llm,
+        tools=tools,
+        prompt=SystemMessage(content=SYSTEM_PROMPT),
     )
-
-    agent = create_react_agent(llm=llm, tools=tools, prompt=prompt)
-    executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
-    return executor
+    return graph
 
 
 app = FastAPI(
@@ -146,14 +157,14 @@ app = FastAPI(
     version="0.1.0",
 )
 
-_agent_executor: Optional[AgentExecutor] = None
+_graph = None
 
 
-def get_agent_executor() -> AgentExecutor:
-    global _agent_executor  # noqa: PLW0603
-    if _agent_executor is None:
-        _agent_executor = _build_agent_executor()
-    return _agent_executor
+def get_graph():
+    global _graph  # noqa: PLW0603
+    if _graph is None:
+        _graph = _build_graph()
+    return _graph
 
 
 @app.get("/health")
@@ -194,21 +205,29 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
     scoring endpoint and synthesizes a structured verdict.
     """
 
-    executor = get_agent_executor()
+    graph = get_graph()
     callback = ThinkingTraceHandler()
 
-    inputs = {
-        "query": request.query,
-        "commander1": request.commander1,
-        "commander2": request.commander2,
-    }
+    # Fold commander names into the user query so the graph sees
+    # the full scenario description in a single message.
+    full_query = (
+        "Battle analysis query:\n"
+        f"{request.query}\n\n"
+        f"Commander 1: {request.commander1}\n"
+        f"Commander 2: {request.commander2}\n\n"
+        "Using the available tools, determine who would be more likely "
+        "to prevail. Remember to always call `calculate_combat_score` "
+        "before your final verdict and respond ONLY with the final "
+        "JSON object."
+    )
 
     try:
-        # Run the (synchronous) agent in a thread to avoid blocking the event loop.
+        # Run the (synchronous) graph in a thread to avoid blocking the event loop.
         result = await asyncio.to_thread(
-            executor.invoke,
-            inputs,
-            {"callbacks": [callback]},
+            lambda: graph.invoke(
+                {"messages": [("user", full_query)]},
+                config={"callbacks": [callback]},
+            )
         )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
@@ -216,12 +235,15 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
             detail=f"Error while running analysis agent: {exc}",
         ) from exc
 
-    raw_output = result.get("output")
-    if raw_output is None:
+    try:
+        # LangGraph ReAct agent returns a state dict with "messages".
+        final_message = result["messages"][-1]
+        raw_output = final_message.content
+    except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=500,
-            detail="Agent did not return any output.",
-        )
+            detail=f"Unexpected graph output format: {exc}",
+        ) from exc
 
     try:
         verdict = json.loads(raw_output)
