@@ -1,0 +1,9 @@
+README.md
+pyproject.toml
+app/__init__.py
+app/main.py
+historical_battle_analyzer_mcp_server.egg-info/PKG-INFO
+historical_battle_analyzer_mcp_server.egg-info/SOURCES.txt
+historical_battle_analyzer_mcp_server.egg-info/dependency_links.txt
+historical_battle_analyzer_mcp_server.egg-info/requires.txt
+historical_battle_analyzer_mcp_server.egg-info/top_level.txt

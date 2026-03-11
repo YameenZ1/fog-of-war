@@ -1,0 +1,10 @@
+Metadata-Version: 2.4
+Name: historical-battle-analyzer-mcp-server
+Version: 0.0.1
+Summary: FastAPI microservice wrapping the Wikipedia API for the Historical Battle Analyzer.
+Requires-Python: >=3.11
+Requires-Dist: fastapi
+Requires-Dist: uvicorn[standard]
+Requires-Dist: httpx
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
