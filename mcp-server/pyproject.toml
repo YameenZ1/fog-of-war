@@ -1,0 +1,20 @@
+[project]
+name = "historical-battle-analyzer-mcp-server"
+version = "0.0.1"
+description = "FastAPI microservice wrapping the Wikipedia API for the Historical Battle Analyzer."
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi",
+  "uvicorn[standard]",
+  "httpx",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+]
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
