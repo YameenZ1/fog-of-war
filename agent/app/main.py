@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from langchain_core.callbacks.base import BaseCallbackHandler
 from langchain_core.messages import SystemMessage
 from langgraph.prebuilt import create_react_agent
@@ -155,6 +156,13 @@ app = FastAPI(
         "a final, structured verdict."
     ),
     version="0.1.0",
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type"],
 )
 
 _graph = None

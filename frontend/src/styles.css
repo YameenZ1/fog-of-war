@@ -2,7 +2,60 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Share Tech Mono applied when font is loaded via injected link */
 body {
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'SF Pro Text',
-    'Segoe UI', sans-serif;
+  font-family: 'Share Tech Mono', 'Courier New', monospace;
+  background-color: #0a0f05;
+}
+
+/* Scanline overlay - fixed over entire viewport */
+.scanlines::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.15) 2px,
+    rgba(0, 0, 0, 0.15) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* Subtle CRT screen flicker */
+@keyframes crt-flicker {
+  0%, 100% { opacity: 1; }
+  92% { opacity: 1; }
+  93% { opacity: 0.98; }
+  94% { opacity: 1; }
+  97% { opacity: 0.99; }
+  98% { opacity: 1; }
+}
+
+.crt-flicker {
+  animation: crt-flicker 4s ease-in-out infinite;
+}
+
+/* Typewriter cursor blink */
+@keyframes cursor-blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+.typewriter-cursor::after {
+  content: '▌';
+  animation: cursor-blink 0.8s step-end infinite;
+  color: #39ff14;
+}
+
+/* Flashing alert for ANALYSIS COMPLETE */
+@keyframes flash-alert {
+  0%, 100% { opacity: 1; text-shadow: 0 0 8px #39ff14; }
+  50% { opacity: 0.9; text-shadow: 0 0 16px #39ff14, 0 0 24px #39ff14; }
+}
+
+.flash-alert {
+  animation: flash-alert 1.5s ease-in-out infinite;
 }
