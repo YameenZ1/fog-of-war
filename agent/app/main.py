@@ -53,6 +53,7 @@ _diagnostics: Dict[str, Any] = {
     "parse_strategy": None,   # "direct" | "repaired" | "failed"
     "parse_error": None,
     "tool_calls": 0,
+    "llm_provider": None,     # which provider actually responded
 }
 
 
@@ -102,60 +103,70 @@ class ThinkingTraceHandler(BaseCallbackHandler):
 
 
 def _get_llm():
-    """Instantiate the underlying chat model based on available environment variables."""
+    """Build an LLM with an automatic provider fallback chain.
 
-    openai_api_key = os.getenv("OPENAI_API_KEY") or ""
-    google_api_key = os.getenv("GOOGLE_API_KEY") or ""
-    groq_api_key = os.getenv("GROQ_API_KEY") or ""
+    All configured providers are chained in priority order using
+    LangChain's .with_fallbacks(). If the primary provider raises any
+    exception (e.g. a Gemini 429 quota error), the next provider in the
+    chain is tried automatically — no manual key toggling needed.
+
+    Priority: Google Gemini → Groq → OpenAI
+    """
 
     def _is_valid(key: str) -> bool:
         lowered = key.lower()
         return bool(key) and "your" not in lowered and "here" not in lowered
 
-    openai_valid = _is_valid(openai_api_key)
-    google_valid = _is_valid(google_api_key)
-    groq_valid = _is_valid(groq_api_key)
+    candidates = []  # ordered list of (label, llm) tuples
 
-    # Prefer a valid Google Generative AI key if available.
-    if google_valid:
+    google_api_key = os.getenv("GOOGLE_API_KEY") or ""
+    if _is_valid(google_api_key):
         try:
             from langchain_google_genai import ChatGoogleGenerativeAI
-        except ImportError as exc:  # noqa: BLE001
-            raise RuntimeError(
-                "GOOGLE_API_KEY is set but langchain-google-genai is not installed."
-            ) from exc
+            model_name = os.getenv("GOOGLE_MODEL", "gemini-2.0-flash")
+            candidates.append(("Google Gemini", ChatGoogleGenerativeAI(model=model_name, temperature=0)))
+        except ImportError:
+            logger.warning("GOOGLE_API_KEY set but langchain-google-genai is not installed — skipping")
 
-        model_name = os.getenv("GOOGLE_MODEL", "gemini-2.0-flash")
-        return ChatGoogleGenerativeAI(model=model_name, temperature=0)
-
-    # Next, prefer a valid Groq key if available.
-    if groq_valid:
+    groq_api_key = os.getenv("GROQ_API_KEY") or ""
+    if _is_valid(groq_api_key):
         try:
             from langchain_groq import ChatGroq
-        except ImportError as exc:  # noqa: BLE001
-            raise RuntimeError(
-                "GROQ_API_KEY is set but langchain-groq is not installed."
-            ) from exc
+            model_name = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+            candidates.append(("Groq", ChatGroq(model=model_name, temperature=0)))
+        except ImportError:
+            logger.warning("GROQ_API_KEY set but langchain-groq is not installed — skipping")
 
-        model_name = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-        return ChatGroq(model=model_name, temperature=0)
-
-    if openai_valid:
+    openai_api_key = os.getenv("OPENAI_API_KEY") or ""
+    if _is_valid(openai_api_key):
         try:
             from langchain_openai import ChatOpenAI
-        except ImportError as exc:  # noqa: BLE001
-            raise RuntimeError(
-                "OPENAI_API_KEY is set but langchain-openai is not installed."
-            ) from exc
+            model_name = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+            candidates.append(("OpenAI", ChatOpenAI(model=model_name, temperature=0)))
+        except ImportError:
+            logger.warning("OPENAI_API_KEY set but langchain-openai is not installed — skipping")
 
-        model_name = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
-        return ChatOpenAI(model=model_name, temperature=0)
+    if not candidates:
+        raise RuntimeError(
+            "No LLM configured. Provide at least one of: "
+            "GOOGLE_API_KEY, GROQ_API_KEY, or OPENAI_API_KEY."
+        )
 
-    raise RuntimeError(
-        "No supported LLM configured. "
-        "Provide a valid GOOGLE_API_KEY (preferred) or OPENAI_API_KEY in the environment. "
-        "Keys must not be placeholder values containing 'your' or 'here'."
+    labels = [label for label, _ in candidates]
+    llms = [llm for _, llm in candidates]
+
+    if len(llms) == 1:
+        logger.info("LLM provider: %s (no fallback configured)", labels[0])
+        return llms[0]
+
+    # Chain primary with automatic fallbacks — if primary raises any
+    # exception (quota, rate-limit, network) the next provider is tried.
+    logger.info(
+        "LLM provider chain: %s → (fallbacks: %s)",
+        labels[0],
+        " → ".join(labels[1:]),
     )
+    return llms[0].with_fallbacks(llms[1:])
 
 
 def _build_graph():
