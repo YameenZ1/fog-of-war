@@ -203,6 +203,65 @@ async def health() -> Dict[str, Any]:
     }
 
 
+@app.get("/suggestions")
+async def get_suggestions() -> Dict[str, Any]:
+    """
+    Generate fresh, AI-produced battle scenario suggestions.
+
+    Calls the LLM directly (no ReAct agent loop) for speed.
+    Returns a JSON object with two arrays:
+      - theaters: 8 diverse battle locations
+      - forces:   10 diverse commanders / armies / factions
+    Every call produces a different set so the briefing screen
+    feels fresh on each new analysis.
+    """
+    try:
+        llm = _get_llm()
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"LLM not available: {exc}") from exc
+
+    prompt = (
+        "Generate creative battle scenario suggestions for a tactical war-game. "
+        "Return ONLY a valid JSON object — no markdown fences, no preamble, no commentary.\n\n"
+        "{\n"
+        '  "theaters": [\n'
+        "    8 diverse battle locations — mix of famous historical battlefields, "
+        "exotic or remote locations, mythological / legendary settings, and at least "
+        "one genuinely surprising or absurd venue\n"
+        "  ],\n"
+        '  "forces": [\n'
+        "    10 diverse combatants — mix of historical commanders, ancient armies, "
+        "fictional or mythological factions, and at least two unconventional wildcard "
+        "entries (e.g. a concept, creature army, or pop-culture force)\n"
+        "  ]\n"
+        "}\n\n"
+        "Do NOT include the most clichéd pairings. Be creative and varied."
+    )
+
+    try:
+        # Run synchronous LLM call off the event loop thread.
+        response = await asyncio.to_thread(lambda: llm.invoke(prompt))
+        raw = response.content if hasattr(response, "content") else str(response)
+
+        # Robustly extract the JSON object from the raw response.
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            raw = raw[start : end + 1]
+
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"LLM returned non-JSON suggestions: {exc}",
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to generate suggestions: {exc}",
+        ) from exc
+
+
 @app.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
     """

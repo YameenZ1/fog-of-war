@@ -77,6 +77,53 @@ function useShareTechMono() {
   }, []);
 }
 
+/* ── Suggestions types ────────────────────────────────────── */
+interface Suggestions {
+  theaters: string[];
+  forces: string[];
+}
+
+/* ── Suggestion chips ─────────────────────────────────────── */
+function SuggestionChips({
+  chips,
+  onSelect,
+  loading,
+  exclude,
+}: {
+  chips: string[];
+  onSelect: (v: string) => void;
+  loading: boolean;
+  exclude?: string;
+}) {
+  if (loading) {
+    return (
+      <p className="text-phosphor/30 text-xs mt-1 mb-3 tracking-wider">
+        &gt;&gt; GENERATING SCENARIO OPTIONS...
+      </p>
+    );
+  }
+  if (!chips.length) return null;
+  const visible = exclude
+    ? chips.filter((c) => c.toLowerCase() !== exclude.toLowerCase())
+    : chips;
+  return (
+    <div className="flex flex-wrap gap-1.5 mt-1.5 mb-3">
+      {visible.map((chip) => (
+        <button
+          key={chip}
+          type="button"
+          onClick={() => onSelect(chip)}
+          className="text-xs font-terminal border border-dashed border-phosphor/35 text-phosphor/55
+            hover:text-phosphor hover:border-phosphor/75 hover:bg-phosphor/5
+            px-2 py-0.5 rounded transition-all"
+        >
+          {chip}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /* ── Plain text input ─────────────────────────────────────── */
 function TextInput({
   label,
@@ -85,6 +132,7 @@ function TextInput({
   placeholder,
   error,
   disabled,
+  children,
 }: {
   label: string;
   value: string;
@@ -92,9 +140,10 @@ function TextInput({
   placeholder: string;
   error?: string | null;
   disabled?: boolean;
+  children?: React.ReactNode;
 }) {
   return (
-    <div className="mb-4">
+    <div className="mb-2">
       <label className="block font-terminal text-phosphor text-sm mb-1 tracking-wider">
         {label}
       </label>
@@ -106,6 +155,7 @@ function TextInput({
         disabled={disabled}
         className="w-full bg-war-bg border border-dashed border-phosphor/70 text-phosphor font-terminal px-3 py-2 rounded focus:outline-none focus:shadow-glow placeholder-phosphor/30 disabled:opacity-50"
       />
+      {children}
       {error && (
         <p className="mt-1 font-terminal text-terminal-red text-sm">{error}</p>
       )}
@@ -220,6 +270,12 @@ export function App() {
   const [forceAlpha, setForceAlpha] = useState('');
   const [forceBravo, setForceBravo] = useState('');
 
+  /* — Suggestions — */
+  const [suggestions, setSuggestions] = useState<Suggestions | null>(null);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  // Incrementing this key triggers a fresh suggestions fetch on each new analysis.
+  const [suggestionKey, setSuggestionKey] = useState(0);
+
   /* — Gathering — */
   const [statusStep, setStatusStep] = useState(0);
   const [typewriterLen, setTypewriterLen] = useState(0);
@@ -241,6 +297,20 @@ export function App() {
   const [narrativeIndex, setNarrativeIndex] = useState(0);
   const [narrativeCharIndex, setNarrativeCharIndex] = useState(0);
   const [narrativeTypeDone, setNarrativeTypeDone] = useState(false);
+
+  /* ── Suggestions fetch — fires on mount and each time suggestionKey changes ── */
+  useEffect(() => {
+    if (stage !== 'briefing') return;
+    setSuggestionsLoading(true);
+    setSuggestions(null);
+    fetch('http://localhost:8000/suggestions')
+      .then((r) => (r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`)))
+      .then((data: Suggestions) => {
+        setSuggestions(data);
+        setSuggestionsLoading(false);
+      })
+      .catch(() => setSuggestionsLoading(false)); // silently degrade — form still works without them
+  }, [suggestionKey, stage]);
 
   /* ── Validation ── */
   const allValid =
@@ -358,6 +428,7 @@ export function App() {
     setTheater('');
     setForceAlpha('');
     setForceBravo('');
+    setSuggestionKey((k) => k + 1); // triggers a fresh suggestions fetch
     setAnalysisResult(null);
     setApiError(null);
     setStatusStep(0);
@@ -431,13 +502,28 @@ export function App() {
               value={theater}
               onChange={setTheater}
               placeholder="Any location — real, fictional, or hypothetical..."
-            />
+            >
+              <SuggestionChips
+                chips={suggestions?.theaters ?? []}
+                onSelect={setTheater}
+                loading={suggestionsLoading}
+              />
+            </TextInput>
+
             <TextInput
               label="FORCE ALPHA:"
               value={forceAlpha}
               onChange={setForceAlpha}
               placeholder="Any commander, army, faction, or concept..."
-            />
+            >
+              <SuggestionChips
+                chips={suggestions?.forces ?? []}
+                onSelect={setForceAlpha}
+                loading={suggestionsLoading}
+                exclude={forceBravo}
+              />
+            </TextInput>
+
             <TextInput
               label="FORCE BRAVO:"
               value={forceBravo}
@@ -449,7 +535,15 @@ export function App() {
                   ? '>> FORCE BRAVO MUST DIFFER FROM FORCE ALPHA'
                   : null
               }
-            />
+            >
+              <SuggestionChips
+                chips={suggestions?.forces ?? []}
+                onSelect={setForceBravo}
+                loading={suggestionsLoading}
+                exclude={forceAlpha}
+              />
+            </TextInput>
+
             <div className="mt-8 flex justify-center">
               <KeyButton onClick={startAnalysis} disabled={!allValid}>
                 [ INITIATE TACTICAL ANALYSIS ]
