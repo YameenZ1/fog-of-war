@@ -255,10 +255,16 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
         ) from exc
 
     try:
-        # Strip markdown code fences the model sometimes wraps JSON in.
+        # Strip markdown code fences the model sometimes wraps JSON in,
+        # then find the first '{' and last '}' to isolate the JSON object
+        # even if the model adds preamble or trailing commentary.
         cleaned = raw_output.strip()
-        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
-        cleaned = re.sub(r"\s*```$", "", cleaned).strip()
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.MULTILINE)
+        cleaned = re.sub(r"\s*```\s*$", "", cleaned, flags=re.MULTILINE).strip()
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            cleaned = cleaned[start : end + 1]
         verdict = json.loads(cleaned)
     except json.JSONDecodeError:
         # If the model responded with non-JSON text, wrap it so the

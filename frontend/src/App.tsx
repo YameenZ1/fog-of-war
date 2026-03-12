@@ -17,7 +17,7 @@ interface InitialDeployment {
   description: string;
   commander1_formation: string;
   commander2_formation: string;
-  terrain_advantage: string; // 'commander1' | 'commander2' | 'neutral'
+  terrain_advantage: string;
 }
 
 interface Aftermath {
@@ -48,8 +48,8 @@ interface AnalyzeResponse {
 /* ── Constants ────────────────────────────────────────────── */
 const STATUS_MESSAGES = [
   '>> ACCESSING TACTICAL DATABASE...',
-  '>> RETRIEVING INTELLIGENCE ON: ',   // appended with forceAlpha
-  '>> RETRIEVING INTELLIGENCE ON: ',   // appended with forceBravo
+  '>> RETRIEVING INTELLIGENCE ON: ',
+  '>> RETRIEVING INTELLIGENCE ON: ',
   '>> ANALYZING ERA TECHNOLOGY DIFFERENTIAL...',
   '>> CROSS-REFERENCING BATTLE RECORDS...',
   '>> RUNNING COMBAT SIMULATION...',
@@ -113,7 +113,7 @@ function TextInput({
   );
 }
 
-/* ── Horizontal score bar ─────────────────────────────────── */
+/* ── Score bar ────────────────────────────────────────────── */
 function ScoreBar({ label, value }: { label: string; value: number }) {
   return (
     <div className="mb-2">
@@ -131,7 +131,7 @@ function ScoreBar({ label, value }: { label: string; value: number }) {
   );
 }
 
-/* ── Section header with divider ─────────────────────────── */
+/* ── Section header ───────────────────────────────────────── */
 function SectionHeader({ children }: { children: React.ReactNode }) {
   return (
     <div className="mb-5">
@@ -148,11 +148,13 @@ function KeyButton({
   children,
   onClick,
   disabled,
+  dim,
   className = '',
 }: {
   children: React.ReactNode;
   onClick: () => void;
   disabled?: boolean;
+  dim?: boolean;
   className?: string;
 }) {
   const [pressed, setPressed] = useState(false);
@@ -165,10 +167,13 @@ function KeyButton({
       onMouseLeave={() => setPressed(false)}
       disabled={disabled}
       className={
-        `font-terminal border-2 border-phosphor/80 px-6 py-3 rounded text-phosphor
-        shadow-glow hover:shadow-glow-strong transition-all
+        `font-terminal border-2 px-5 py-2 rounded transition-all text-sm
         disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none
-        ${pressed ? 'scale-[0.98] shadow-inner' : ''} ` + className
+        ${dim
+          ? 'border-phosphor/30 text-phosphor/50 hover:border-phosphor/60 hover:text-phosphor/80'
+          : 'border-phosphor/80 text-phosphor shadow-glow hover:shadow-glow-strong'
+        }
+        ${pressed ? 'scale-[0.97]' : ''} ` + className
       }
     >
       {children}
@@ -176,43 +181,75 @@ function KeyButton({
   );
 }
 
-/* ── Main app ─────────────────────────────────────────────── */
+/* ── Section action bar (back + skip + proceed) ───────────── */
+function ActionBar({
+  onBack,
+  onSkip,
+  onProceed,
+  proceedLabel,
+  proceedReady,
+}: {
+  onBack: () => void;
+  onSkip: () => void;
+  onProceed: () => void;
+  proceedLabel: string;
+  proceedReady: boolean;
+}) {
+  return (
+    <div className="flex items-center justify-between mt-8 pt-4 border-t border-dashed border-phosphor/20">
+      <KeyButton dim onClick={onBack}>[ ← MODIFY PARAMETERS ]</KeyButton>
+      <div className="flex gap-3">
+        <KeyButton dim onClick={onSkip}>[ SKIP TO FULL REPORT ]</KeyButton>
+        <KeyButton onClick={onProceed} disabled={!proceedReady}>
+          {proceedReady ? proceedLabel : '[ AWAITING DATA... ]'}
+        </KeyButton>
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════
+   Main App
+══════════════════════════════════════════════════════════ */
 export function App() {
   useShareTechMono();
 
-  /* — Briefing inputs — */
+  /* — Briefing — */
   const [stage, setStage] = useState<Stage>('briefing');
   const [theater, setTheater] = useState('');
   const [forceAlpha, setForceAlpha] = useState('');
   const [forceBravo, setForceBravo] = useState('');
 
-  /* — Gathering / loading state — */
+  /* — Gathering — */
   const [statusStep, setStatusStep] = useState(0);
   const [typewriterLen, setTypewriterLen] = useState(0);
   const [progress, setProgress] = useState(0);
   const [apiError, setApiError] = useState<string | null>(null);
   const fetchStarted = useRef(false);
 
-  /* — Assessment result + phase — */
+  /* — Assessment — */
   const [analysisResult, setAnalysisResult] = useState<AnalyzeResponse | null>(null);
   const [assessPhase, setAssessPhase] = useState<AssessPhase>(0);
+  const [skipped, setSkipped] = useState(false);
 
-  /* — Phase 0: typewriter for deployment description — */
+  /* — Phase 0 typewriter — */
   const [deployCharIndex, setDeployCharIndex] = useState(0);
+  const [deployTypeDone, setDeployTypeDone] = useState(false);
 
-  /* — Phase 2: typewriter for narrative — */
+  /* — Phase 2 typewriter — */
   const [narrativeParas, setNarrativeParas] = useState<string[]>([]);
   const [narrativeIndex, setNarrativeIndex] = useState(0);
   const [narrativeCharIndex, setNarrativeCharIndex] = useState(0);
+  const [narrativeTypeDone, setNarrativeTypeDone] = useState(false);
 
-  /* ── Validation: any non-empty text, different from each other ── */
+  /* ── Validation ── */
   const allValid =
     theater.trim().length > 0 &&
     forceAlpha.trim().length > 0 &&
     forceBravo.trim().length > 0 &&
     forceAlpha.trim().toLowerCase() !== forceBravo.trim().toLowerCase();
 
-  /* ── Gathering: build current status message ── */
+  /* ── Gathering: status line typewriter ── */
   const currentStatusMessage =
     statusStep >= STATUS_MESSAGES.length
       ? ''
@@ -222,11 +259,10 @@ export function App() {
       ? STATUS_MESSAGES[2] + forceBravo
       : STATUS_MESSAGES[statusStep];
 
-  /* ── Gathering: typewriter scrolling through status lines ── */
   useEffect(() => {
     if (stage !== 'gathering' || apiError) return;
     if (typewriterLen < currentStatusMessage.length) {
-      const t = setTimeout(() => setTypewriterLen((n) => n + 1), 25);
+      const t = setTimeout(() => setTypewriterLen((n) => n + 1), 18);
       return () => clearTimeout(t);
     }
     const t = setTimeout(() => {
@@ -237,11 +273,11 @@ export function App() {
       } else {
         setProgress(100);
       }
-    }, 1400);
+    }, 800);
     return () => clearTimeout(t);
   }, [stage, statusStep, typewriterLen, currentStatusMessage.length, apiError]);
 
-  /* ── Gathering: fire the API call once ── */
+  /* ── Gathering: fire API call ── */
   useEffect(() => {
     if (stage !== 'gathering' || fetchStarted.current) return;
     fetchStarted.current = true;
@@ -261,13 +297,13 @@ export function App() {
       .then((data: AnalyzeResponse) => {
         setAnalysisResult(data);
         setProgress(100);
-        // Prep narrative paragraphs for phase-2 typewriter
-        const narrative = data.verdict?.narrative ?? '';
-        setNarrativeParas(narrative.split(/\n\n+/).filter(Boolean));
+        setNarrativeParas((data.verdict?.narrative ?? '').split(/\n\n+/).filter(Boolean));
         setNarrativeIndex(0);
         setNarrativeCharIndex(0);
-        // Reset assessment animation state
         setDeployCharIndex(0);
+        setDeployTypeDone(false);
+        setNarrativeTypeDone(false);
+        setSkipped(false);
         setAssessPhase(0);
         setStage('assessment');
       })
@@ -276,46 +312,35 @@ export function App() {
       });
   }, [stage, theater, forceAlpha, forceBravo]);
 
-  /* ── Assessment phase 0: typewriter for deployment description ── */
+  /* ── Phase 0: deployment description typewriter ── */
   const deployDesc = analysisResult?.verdict?.initial_deployment?.description ?? '';
   useEffect(() => {
-    if (stage !== 'assessment' || assessPhase !== 0) return;
+    if (stage !== 'assessment' || assessPhase !== 0 || skipped || deployTypeDone) return;
     if (deployCharIndex < deployDesc.length) {
-      const t = setTimeout(() => setDeployCharIndex((n) => n + 1), 20);
+      const t = setTimeout(() => setDeployCharIndex((n) => n + 1), 15);
       return () => clearTimeout(t);
     }
-    // Description fully typed — wait then reveal stats
-    const t = setTimeout(() => setAssessPhase(1), 1600);
-    return () => clearTimeout(t);
-  }, [stage, assessPhase, deployCharIndex, deployDesc.length]);
+    setDeployTypeDone(true);
+  }, [stage, assessPhase, deployCharIndex, deployDesc.length, skipped, deployTypeDone]);
 
-  /* ── Assessment phase 1 → 2: auto-advance after stats appear ── */
+  /* ── Phase 2: narrative typewriter ── */
   useEffect(() => {
-    if (stage !== 'assessment' || assessPhase !== 1) return;
-    const t = setTimeout(() => setAssessPhase(2), 2200);
-    return () => clearTimeout(t);
-  }, [stage, assessPhase]);
-
-  /* ── Assessment phase 2: narrative typewriter ── */
-  useEffect(() => {
-    if (stage !== 'assessment' || assessPhase !== 2 || narrativeParas.length === 0) return;
+    if (stage !== 'assessment' || assessPhase !== 2 || skipped || narrativeTypeDone) return;
     const para = narrativeParas[narrativeIndex];
     if (!para) return;
     if (narrativeCharIndex < para.length) {
-      const t = setTimeout(() => setNarrativeCharIndex((n) => n + 1), 18);
+      const t = setTimeout(() => setNarrativeCharIndex((n) => n + 1), 12);
       return () => clearTimeout(t);
     }
     if (narrativeIndex < narrativeParas.length - 1) {
       const t = setTimeout(() => {
         setNarrativeIndex((n) => n + 1);
         setNarrativeCharIndex(0);
-      }, 350);
+      }, 300);
       return () => clearTimeout(t);
     }
-    // Narrative complete — reveal aftermath
-    const t = setTimeout(() => setAssessPhase(3), 1000);
-    return () => clearTimeout(t);
-  }, [stage, assessPhase, narrativeParas, narrativeIndex, narrativeCharIndex]);
+    setNarrativeTypeDone(true);
+  }, [stage, assessPhase, narrativeParas, narrativeIndex, narrativeCharIndex, skipped, narrativeTypeDone]);
 
   /* ── Actions ── */
   const startAnalysis = useCallback(() => {
@@ -339,11 +364,21 @@ export function App() {
     setTypewriterLen(0);
     setProgress(0);
     setAssessPhase(0);
+    setSkipped(false);
     setDeployCharIndex(0);
+    setDeployTypeDone(false);
     setNarrativeParas([]);
     setNarrativeIndex(0);
     setNarrativeCharIndex(0);
+    setNarrativeTypeDone(false);
     fetchStarted.current = false;
+  }, []);
+
+  const skipToEnd = useCallback(() => {
+    setSkipped(true);
+    setDeployTypeDone(true);
+    setNarrativeTypeDone(true);
+    setAssessPhase(3);
   }, []);
 
   /* ── Derived ── */
@@ -376,7 +411,7 @@ export function App() {
         {/* Header */}
         <header className="text-center mb-8">
           <h1 className="text-2xl md:text-3xl font-terminal text-phosphor tracking-widest mb-1">
-            STRATEGOS TACTICAL ANALYSIS SYSTEM v1.0
+            FOG OF WAR // TACTICAL ANALYSIS SYSTEM
           </h1>
           <p className="text-amber/90 text-sm tracking-widest">
             CLASSIFICATION: TOP SECRET // EYES ONLY
@@ -424,12 +459,11 @@ export function App() {
         )}
 
         {/* ══════════════════════════════════════
-            STAGE 2 — GATHERING (loading)
+            STAGE 2 — GATHERING
         ══════════════════════════════════════ */}
         {stage === 'gathering' && (
           <section>
             {apiError ? (
-              /* Immediate failure state */
               <div className="border border-dashed border-terminal-red rounded p-6 text-center">
                 <p className="text-terminal-red text-lg mb-2 tracking-wider">
                   !! TRANSMISSION FAILED !!
@@ -442,7 +476,6 @@ export function App() {
                 <h2 className="text-amber text-lg mb-4 tracking-wider">
                   RETRIEVING FIELD INTELLIGENCE...
                 </h2>
-                {/* Scrolling status lines */}
                 <div className="space-y-2 mb-6 min-h-[240px]">
                   {Array.from({ length: statusStep + 1 }).map((_, i) => (
                     <p key={i} className="text-phosphor text-sm">
@@ -457,7 +490,6 @@ export function App() {
                     </p>
                   ))}
                 </div>
-                {/* Progress bar */}
                 <div className="mb-4">
                   <div className="h-2 border border-dashed border-phosphor/70 rounded overflow-hidden bg-war-bg">
                     <div
@@ -465,9 +497,7 @@ export function App() {
                       style={{ width: `${progress}%` }}
                     />
                   </div>
-                  <p className="text-right text-phosphor/50 text-xs mt-1">
-                    {Math.round(progress)}%
-                  </p>
+                  <p className="text-right text-phosphor/50 text-xs mt-1">{Math.round(progress)}%</p>
                 </div>
               </>
             )}
@@ -475,7 +505,7 @@ export function App() {
         )}
 
         {/* ══════════════════════════════════════
-            STAGE 3 — ASSESSMENT (4 phases)
+            STAGE 3 — ASSESSMENT
         ══════════════════════════════════════ */}
         {stage === 'assessment' && verdict && (
           <section>
@@ -484,23 +514,25 @@ export function App() {
               ANALYSIS COMPLETE — VICTOR:{' '}
               <span className="text-phosphor">{verdict.winner ?? 'UNKNOWN'}</span>
               {'  '}
-              <span className="text-phosphor/60 text-sm">
+              <span className="text-phosphor/50 text-sm">
                 ({verdict.confidence_percentage ?? 0}% CONFIDENCE)
               </span>
             </h2>
 
-            {/* ── SECTION I — INITIAL CONTACT ───────────────────── */}
+            {/* ── SECTION I — INITIAL CONTACT ──────────────────── */}
             <div className="mb-10 section-reveal">
               <SectionHeader>[ SECTION I — INITIAL CONTACT ]</SectionHeader>
 
-              {/* Deployment description (typewriter) */}
+              {/* Deployment description with typewriter */}
               <p className="text-phosphor/90 text-sm leading-relaxed mb-6">
-                {deployDesc.slice(0, deployCharIndex)}
-                {assessPhase === 0 && <span className="typewriter-cursor" />}
+                {skipped ? deployDesc : deployDesc.slice(0, deployCharIndex)}
+                {!skipped && assessPhase === 0 && !deployTypeDone && (
+                  <span className="typewriter-cursor" />
+                )}
               </p>
 
-              {/* Formation cards — appear after description finishes */}
-              {assessPhase >= 1 && (
+              {/* Formation cards — appear once description is done */}
+              {(deployTypeDone || skipped) && (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4 section-reveal">
                   <div className="border border-dashed border-phosphor/40 rounded p-4">
                     <p className="text-amber text-xs tracking-wider mb-2">
@@ -521,20 +553,31 @@ export function App() {
                 </div>
               )}
 
-              {assessPhase >= 1 && (
-                <p className="text-xs text-phosphor/50 tracking-wider section-reveal">
+              {(deployTypeDone || skipped) && deployment?.terrain_advantage && (
+                <p className="text-xs text-phosphor/50 tracking-wider mb-2 section-reveal">
                   TERRAIN ADVANTAGE:{' '}
                   <span className="text-amber">{terrainLabel}</span>
                 </p>
               )}
+
+              {/* Action bar — only visible while on this section */}
+              {assessPhase === 0 && (
+                <ActionBar
+                  onBack={resetToBriefing}
+                  onSkip={skipToEnd}
+                  onProceed={() => setAssessPhase(1)}
+                  proceedLabel="[ SECTION II — PRE-BATTLE ASSESSMENT → ]"
+                  proceedReady={deployTypeDone}
+                />
+              )}
             </div>
 
-            {/* ── SECTION II — PRE-BATTLE ASSESSMENT ───────────── */}
+            {/* ── SECTION II — PRE-BATTLE ASSESSMENT ──────────── */}
             {assessPhase >= 1 && (
               <div className="mb-10 section-reveal">
                 <SectionHeader>[ SECTION II — PRE-BATTLE ASSESSMENT ]</SectionHeader>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {/* Force Alpha stats */}
+                  {/* Force Alpha */}
                   <div className="border border-dashed border-phosphor/70 rounded p-4 shadow-glow">
                     <h3 className="text-amber text-xs tracking-wider mb-1">
                       FORCE ALPHA: {forceAlpha.toUpperCase()}
@@ -545,11 +588,16 @@ export function App() {
                     </p>
                     {BREAKDOWN_KEYS.map((key) => {
                       const v = breakdown[key];
-                      const num = typeof v?.commander1 === 'number' ? v.commander1 : 0;
-                      return <ScoreBar key={key} label={key} value={num} />;
+                      return (
+                        <ScoreBar
+                          key={key}
+                          label={key}
+                          value={typeof v?.commander1 === 'number' ? v.commander1 : 0}
+                        />
+                      );
                     })}
                   </div>
-                  {/* Force Bravo stats */}
+                  {/* Force Bravo */}
                   <div className="border border-dashed border-phosphor/70 rounded p-4 shadow-glow">
                     <h3 className="text-amber text-xs tracking-wider mb-1">
                       FORCE BRAVO: {forceBravo.toUpperCase()}
@@ -560,33 +608,66 @@ export function App() {
                     </p>
                     {BREAKDOWN_KEYS.map((key) => {
                       const v = breakdown[key];
-                      const num = typeof v?.commander2 === 'number' ? v.commander2 : 0;
-                      return <ScoreBar key={key} label={key} value={num} />;
+                      return (
+                        <ScoreBar
+                          key={key}
+                          label={key}
+                          value={typeof v?.commander2 === 'number' ? v.commander2 : 0}
+                        />
+                      );
                     })}
                   </div>
                 </div>
+
+                {/* Action bar */}
+                {assessPhase === 1 && (
+                  <ActionBar
+                    onBack={resetToBriefing}
+                    onSkip={skipToEnd}
+                    onProceed={() => setAssessPhase(2)}
+                    proceedLabel="[ SECTION III — BATTLE SIMULATION → ]"
+                    proceedReady={true}
+                  />
+                )}
               </div>
             )}
 
-            {/* ── SECTION III — BATTLE SIMULATION ──────────────── */}
+            {/* ── SECTION III — BATTLE SIMULATION ─────────────── */}
             {assessPhase >= 2 && (
               <div className="mb-10 section-reveal">
                 <SectionHeader>[ SECTION III — BATTLE SIMULATION ]</SectionHeader>
                 <div className="space-y-4">
-                  {/* Fully-typed paragraphs */}
-                  {narrativeParas.slice(0, narrativeIndex).map((p, i) => (
-                    <p key={i} className="text-phosphor/90 text-sm leading-relaxed">
-                      {p}
-                    </p>
-                  ))}
-                  {/* Currently-typing paragraph */}
-                  {narrativeParas[narrativeIndex] !== undefined && (
-                    <p className="text-phosphor/90 text-sm leading-relaxed">
-                      {narrativeParas[narrativeIndex].slice(0, narrativeCharIndex)}
-                      {assessPhase === 2 && <span className="typewriter-cursor" />}
-                    </p>
+                  {skipped ? (
+                    narrativeParas.map((p, i) => (
+                      <p key={i} className="text-phosphor/90 text-sm leading-relaxed">{p}</p>
+                    ))
+                  ) : (
+                    <>
+                      {narrativeParas.slice(0, narrativeIndex).map((p, i) => (
+                        <p key={i} className="text-phosphor/90 text-sm leading-relaxed">{p}</p>
+                      ))}
+                      {narrativeParas[narrativeIndex] !== undefined && (
+                        <p className="text-phosphor/90 text-sm leading-relaxed">
+                          {narrativeParas[narrativeIndex].slice(0, narrativeCharIndex)}
+                          {assessPhase === 2 && !narrativeTypeDone && (
+                            <span className="typewriter-cursor" />
+                          )}
+                        </p>
+                      )}
+                    </>
                   )}
                 </div>
+
+                {/* Action bar */}
+                {assessPhase === 2 && (
+                  <ActionBar
+                    onBack={resetToBriefing}
+                    onSkip={skipToEnd}
+                    onProceed={() => setAssessPhase(3)}
+                    proceedLabel="[ SECTION IV — AFTERMATH REPORT → ]"
+                    proceedReady={narrativeTypeDone || skipped}
+                  />
+                )}
               </div>
             )}
 
@@ -595,7 +676,6 @@ export function App() {
               <div className="mb-8 section-reveal">
                 <SectionHeader>[ SECTION IV — AFTERMATH REPORT ]</SectionHeader>
 
-                {/* Aftermath description */}
                 <p className="text-phosphor/90 text-sm leading-relaxed mb-6">
                   {aftermath.description}
                 </p>
@@ -616,20 +696,16 @@ export function App() {
                   </div>
                 </div>
 
-                {/* Strategic & historical significance */}
+                {/* Strategic & historical notes */}
                 <div className="space-y-4 mb-6">
                   <div className="border-l-2 border-phosphor/40 pl-4">
-                    <p className="text-amber text-xs tracking-wider mb-1">
-                      STRATEGIC CONSEQUENCE
-                    </p>
+                    <p className="text-amber text-xs tracking-wider mb-1">STRATEGIC CONSEQUENCE</p>
                     <p className="text-phosphor/85 text-sm leading-relaxed">
                       {aftermath.strategic_consequence}
                     </p>
                   </div>
                   <div className="border-l-2 border-phosphor/40 pl-4">
-                    <p className="text-amber text-xs tracking-wider mb-1">
-                      HISTORICAL SIGNIFICANCE
-                    </p>
+                    <p className="text-amber text-xs tracking-wider mb-1">HISTORICAL SIGNIFICANCE</p>
                     <p className="text-phosphor/85 text-sm leading-relaxed">
                       {aftermath.historical_significance}
                     </p>
@@ -644,7 +720,7 @@ export function App() {
                 )}
 
                 <div className="flex justify-center">
-                  <KeyButton onClick={resetToBriefing}>[ RUN NEW ANALYSIS ]</KeyButton>
+                  <KeyButton onClick={resetToBriefing}>[ ← RUN NEW ANALYSIS ]</KeyButton>
                 </div>
               </div>
             )}
