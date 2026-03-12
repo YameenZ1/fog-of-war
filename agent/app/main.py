@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -254,7 +255,11 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
         ) from exc
 
     try:
-        verdict = json.loads(raw_output)
+        # Strip markdown code fences the model sometimes wraps JSON in.
+        cleaned = raw_output.strip()
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned).strip()
+        verdict = json.loads(cleaned)
     except json.JSONDecodeError:
         # If the model responded with non-JSON text, wrap it so the
         # API contract is still respected.
@@ -263,8 +268,21 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
             "confidence_percentage": None,
             "commander1_score": None,
             "commander2_score": None,
+            "initial_deployment": {
+                "description": "",
+                "commander1_formation": "",
+                "commander2_formation": "",
+                "terrain_advantage": "neutral",
+            },
             "score_breakdown": {},
             "narrative": str(raw_output),
+            "aftermath": {
+                "description": "",
+                "commander1_casualties": "Unknown",
+                "commander2_casualties": "Unknown",
+                "strategic_consequence": "",
+                "historical_significance": "",
+            },
             "fun_fact": "",
         }
 

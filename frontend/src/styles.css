@@ -59,3 +59,13 @@ body {
 .flash-alert {
   animation: flash-alert 1.5s ease-in-out infinite;
 }
+
+/* Section reveal — fade in with a subtle upward slide */
+@keyframes section-reveal {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.section-reveal {
+  animation: section-reveal 0.55s ease-out forwards;
+}
