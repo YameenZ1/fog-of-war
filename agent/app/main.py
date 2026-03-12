@@ -1,19 +1,31 @@
 import asyncio
 import json
+import logging
 import os
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from json_repair import repair_json
 from langchain_core.callbacks.base import BaseCallbackHandler
 from langchain_core.messages import SystemMessage
 from langgraph.prebuilt import create_react_agent
 from pydantic import BaseModel, Field
 
 from .prompts import SYSTEM_PROMPT
+
+# ── Logging setup ──────────────────────────────────────────────────────────────
+# Structured log lines make it easy to grep for JSON parse failures.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger("fog-of-war.agent")
 from .tools import (
     calculate_combat_score,
     get_battle_context,
@@ -25,7 +37,23 @@ from .tools import (
 
 # Load .env from project root (one level up from /agent)
 load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
-print("GOOGLE_API_KEY found:", bool(os.getenv("GOOGLE_API_KEY")))
+logger.info("GOOGLE_API_KEY present: %s", bool(os.getenv("GOOGLE_API_KEY")))
+logger.info("GROQ_API_KEY present:   %s", bool(os.getenv("GROQ_API_KEY")))
+logger.info("OPENAI_API_KEY present: %s", bool(os.getenv("OPENAI_API_KEY")))
+
+# ── In-memory diagnostics store (last analysis only) ───────────────────────────
+# Exposed via GET /diagnostics so you can inspect raw LLM output without
+# tailing logs — especially useful when tracking JSON parse failures.
+_diagnostics: Dict[str, Any] = {
+    "last_analysis_at": None,
+    "commander1": None,
+    "commander2": None,
+    "raw_output": None,
+    "raw_output_length": None,
+    "parse_strategy": None,   # "direct" | "repaired" | "failed"
+    "parse_error": None,
+    "tool_calls": 0,
+}
 
 
 class AnalyzeRequest(BaseModel):
@@ -262,6 +290,23 @@ async def get_suggestions() -> Dict[str, Any]:
         ) from exc
 
 
+@app.get("/diagnostics")
+async def diagnostics() -> Dict[str, Any]:
+    """
+    Returns metadata about the most recent /analyze call.
+
+    Useful for debugging JSON parse failures without tailing logs:
+      - raw_output: the exact string the LLM returned
+      - parse_strategy: "direct" | "repaired" | "failed"
+      - parse_error: the exception message if parsing failed
+      - tool_calls: how many MCP tools the agent invoked
+
+    This endpoint is intentionally unauthenticated for development.
+    Remove or gate it behind an API key before any public deployment.
+    """
+    return _diagnostics
+
+
 @app.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
     """
@@ -313,34 +358,90 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
             detail=f"Unexpected graph output format: {exc}",
         ) from exc
 
+    # ── Update diagnostics with raw output ────────────────────────────────────
+    _diagnostics.update({
+        "last_analysis_at": datetime.now(timezone.utc).isoformat(),
+        "commander1": request.commander1,
+        "commander2": request.commander2,
+        "raw_output": raw_output,
+        "raw_output_length": len(raw_output),
+        "parse_strategy": None,
+        "parse_error": None,
+        "tool_calls": len(callback.trace),
+    })
+    logger.info(
+        "Agent finished | commanders: %s vs %s | raw_output length: %d chars | tools called: %d",
+        request.commander1,
+        request.commander2,
+        len(raw_output),
+        len(callback.trace),
+    )
+    logger.debug("Raw LLM output:\n%s", raw_output)
+
+    # ── JSON extraction with three-tier fallback ───────────────────────────────
+    # Tier 1 — Direct parse: works when the LLM is well-behaved.
+    # Tier 2 — json-repair: fixes unescaped newlines inside strings, trailing
+    #           commas, missing quotes, and other common LLM generation errors.
+    #           This is the permanent fix for the "everything in narrative" bug.
+    # Tier 3 — Fallback struct: keeps the API contract intact while surfacing
+    #           the raw output in the narrative field for manual inspection.
+    verdict = None
+    parse_error = None
+
+    # Strip markdown fences and isolate the JSON object first.
+    cleaned = raw_output.strip()
+    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r"\s*```\s*$", "", cleaned, flags=re.MULTILINE).strip()
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        cleaned = cleaned[start : end + 1]
+
+    # Tier 1: standard json.loads
     try:
-        # Strip markdown code fences the model sometimes wraps JSON in,
-        # then find the first '{' and last '}' to isolate the JSON object
-        # even if the model adds preamble or trailing commentary.
-        cleaned = raw_output.strip()
-        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.MULTILINE)
-        cleaned = re.sub(r"\s*```\s*$", "", cleaned, flags=re.MULTILINE).strip()
-        start = cleaned.find("{")
-        end = cleaned.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            cleaned = cleaned[start : end + 1]
         verdict = json.loads(cleaned)
-    except json.JSONDecodeError:
-        # If the model responded with non-JSON text, wrap it so the
-        # API contract is still respected.
+        _diagnostics["parse_strategy"] = "direct"
+        logger.info("JSON parse strategy: DIRECT (clean output)")
+    except json.JSONDecodeError as exc:
+        parse_error = str(exc)
+        logger.warning("Direct JSON parse failed: %s — trying json-repair", exc)
+
+    # Tier 2: json-repair (handles unescaped newlines, trailing commas, etc.)
+    if verdict is None:
+        try:
+            repaired = repair_json(cleaned)
+            verdict = json.loads(repaired)
+            _diagnostics["parse_strategy"] = "repaired"
+            logger.info("JSON parse strategy: REPAIRED (json-repair fixed malformed output)")
+        except Exception as exc:  # noqa: BLE001
+            parse_error = str(exc)
+            logger.error(
+                "json-repair also failed: %s\nFirst 500 chars of raw output:\n%s",
+                exc,
+                raw_output[:500],
+            )
+
+    # Tier 3: fallback — surface raw output so the developer can inspect it
+    if verdict is None:
+        _diagnostics["parse_strategy"] = "failed"
+        _diagnostics["parse_error"] = parse_error
+        logger.error(
+            "All JSON extraction strategies failed. "
+            "Check GET /diagnostics for the full raw output."
+        )
         verdict = {
             "winner": None,
             "confidence_percentage": None,
             "commander1_score": None,
             "commander2_score": None,
             "initial_deployment": {
-                "description": "",
+                "description": "JSON parse failed — see /diagnostics for raw output.",
                 "commander1_formation": "",
                 "commander2_formation": "",
                 "terrain_advantage": "neutral",
             },
             "score_breakdown": {},
-            "narrative": str(raw_output),
+            "narrative": f"[PARSE ERROR — json-repair could not fix this output]\n\n{raw_output}",
             "aftermath": {
                 "description": "",
                 "commander1_casualties": "Unknown",
@@ -349,6 +450,7 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
                 "historical_significance": "",
             },
             "fun_fact": "",
+            "_parse_error": parse_error,
         }
 
     trace_models = [ToolCallRecord(**record) for record in callback.trace]

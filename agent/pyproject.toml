@@ -15,6 +15,7 @@ dependencies = [
   "httpx",
   "python-dotenv",
   "pydantic>=2",
+  "json-repair",
 ]
 
 [project.optional-dependencies]
