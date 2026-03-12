@@ -332,7 +332,7 @@ export function App() {
   useEffect(() => {
     if (stage !== 'gathering' || apiError) return;
     if (typewriterLen < currentStatusMessage.length) {
-      const t = setTimeout(() => setTypewriterLen((n) => n + 1), 18);
+      const t = setTimeout(() => setTypewriterLen((n) => n + 1), 9);
       return () => clearTimeout(t);
     }
     const t = setTimeout(() => {
@@ -343,7 +343,7 @@ export function App() {
       } else {
         setProgress(100);
       }
-    }, 800);
+    }, 400);
     return () => clearTimeout(t);
   }, [stage, statusStep, typewriterLen, currentStatusMessage.length, apiError]);
 
@@ -387,7 +387,7 @@ export function App() {
   useEffect(() => {
     if (stage !== 'assessment' || assessPhase !== 0 || skipped || deployTypeDone) return;
     if (deployCharIndex < deployDesc.length) {
-      const t = setTimeout(() => setDeployCharIndex((n) => n + 1), 15);
+      const t = setTimeout(() => setDeployCharIndex((n) => n + 1), 7);
       return () => clearTimeout(t);
     }
     setDeployTypeDone(true);
@@ -399,7 +399,7 @@ export function App() {
     const para = narrativeParas[narrativeIndex];
     if (!para) return;
     if (narrativeCharIndex < para.length) {
-      const t = setTimeout(() => setNarrativeCharIndex((n) => n + 1), 12);
+      const t = setTimeout(() => setNarrativeCharIndex((n) => n + 1), 6);
       return () => clearTimeout(t);
     }
     if (narrativeIndex < narrativeParas.length - 1) {
@@ -603,16 +603,6 @@ export function App() {
         ══════════════════════════════════════ */}
         {stage === 'assessment' && verdict && (
           <section>
-            {/* Victor banner */}
-            <h2 className="text-amber text-xl flash-alert mb-8 tracking-wider">
-              ANALYSIS COMPLETE — VICTOR:{' '}
-              <span className="text-phosphor">{verdict.winner ?? 'UNKNOWN'}</span>
-              {'  '}
-              <span className="text-phosphor/50 text-sm">
-                ({verdict.confidence_percentage ?? 0}% CONFIDENCE)
-              </span>
-            </h2>
-
             {/* ── SECTION I — INITIAL CONTACT ──────────────────── */}
             <div className="mb-10 section-reveal">
               <SectionHeader>[ SECTION I — INITIAL CONTACT ]</SectionHeader>
@@ -751,6 +741,20 @@ export function App() {
                     </>
                   )}
                 </div>
+
+                {/* Victor banner — dramatic reveal after narrative finishes */}
+                {(narrativeTypeDone || skipped) && (
+                  <div className="mt-8 mb-2 section-reveal">
+                    <h2 className="text-amber text-xl flash-alert tracking-wider">
+                      ANALYSIS COMPLETE — VICTOR:{' '}
+                      <span className="text-phosphor">{verdict.winner ?? 'UNKNOWN'}</span>
+                      {'  '}
+                      <span className="text-phosphor/50 text-sm">
+                        ({verdict.confidence_percentage ?? 0}% CONFIDENCE)
+                      </span>
+                    </h2>
+                  </div>
+                )}
 
                 {/* Action bar */}
                 {assessPhase === 2 && (
