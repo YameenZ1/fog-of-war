@@ -150,10 +150,10 @@ def _get_llm():
 
     All configured providers are chained in priority order using
     LangChain's .with_fallbacks(). If the primary provider raises any
-    exception (e.g. a Gemini 429 quota error), the next provider in the
-    chain is tried automatically — no manual key toggling needed.
+    exception (rate-limit, quota, network) the next provider is tried
+    automatically — no manual key toggling needed.
 
-    Priority: Google Gemini → Groq → OpenAI
+    Priority: Groq → OpenAI → Google Gemini
     """
 
     def _is_valid(key: str) -> bool:
@@ -161,15 +161,6 @@ def _get_llm():
         return bool(key) and "your" not in lowered and "here" not in lowered
 
     candidates = []  # ordered list of (label, llm) tuples
-
-    google_api_key = os.getenv("GOOGLE_API_KEY") or ""
-    if _is_valid(google_api_key):
-        try:
-            from langchain_google_genai import ChatGoogleGenerativeAI
-            model_name = os.getenv("GOOGLE_MODEL", "gemini-2.0-flash")
-            candidates.append(("Google Gemini", ChatGoogleGenerativeAI(model=model_name, temperature=0)))
-        except ImportError:
-            logger.warning("GOOGLE_API_KEY set but langchain-google-genai is not installed — skipping")
 
     groq_api_key = os.getenv("GROQ_API_KEY") or ""
     if _is_valid(groq_api_key):
@@ -188,6 +179,15 @@ def _get_llm():
             candidates.append(("OpenAI", ChatOpenAI(model=model_name, temperature=0)))
         except ImportError:
             logger.warning("OPENAI_API_KEY set but langchain-openai is not installed — skipping")
+
+    google_api_key = os.getenv("GOOGLE_API_KEY") or ""
+    if _is_valid(google_api_key):
+        try:
+            from langchain_google_genai import ChatGoogleGenerativeAI
+            model_name = os.getenv("GOOGLE_MODEL", "gemini-2.0-flash")
+            candidates.append(("Google Gemini", ChatGoogleGenerativeAI(model=model_name, temperature=0)))
+        except ImportError:
+            logger.warning("GOOGLE_API_KEY set but langchain-google-genai is not installed — skipping")
 
     if not candidates:
         raise RuntimeError(
