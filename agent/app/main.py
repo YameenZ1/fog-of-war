@@ -163,6 +163,17 @@ class ThinkingTraceHandler(BaseCallbackHandler):
                 record["output"] = output
                 break
 
+    def on_llm_error(self, error: BaseException, **kwargs: Any) -> None:
+        # Fires immediately when the LLM raises — long before the retry chain
+        # collapses and the exception reaches the /analyze handler.  Setting
+        # _last_rate_limit_at here means the /health poll will see the correct
+        # "SYSTEM DEACTIVATED" status within the same second the first 429 lands.
+        global _last_rate_limit_at  # noqa: PLW0603
+        err_str = str(error)
+        if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "rate_limit" in err_str.lower():
+            _last_rate_limit_at = datetime.now(timezone.utc)
+            logger.warning("Rate-limit detected (LLM error callback) — status set to deactivated")
+
 
 def _get_llm():
     """Build an LLM with an automatic provider fallback chain.
@@ -369,6 +380,11 @@ async def get_suggestions() -> Dict[str, Any]:
             detail=f"LLM returned non-JSON suggestions: {exc}",
         ) from exc
     except Exception as exc:  # noqa: BLE001
+        global _last_rate_limit_at  # noqa: PLW0603
+        exc_str = str(exc)
+        if "429" in exc_str or "RESOURCE_EXHAUSTED" in exc_str or "rate_limit" in exc_str.lower():
+            _last_rate_limit_at = datetime.now(timezone.utc)
+            logger.warning("Rate-limit detected in /suggestions — status set to deactivated")
         raise HTTPException(
             status_code=500,
             detail=f"Failed to generate suggestions: {exc}",
