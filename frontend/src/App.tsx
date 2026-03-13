@@ -112,9 +112,11 @@ function extractInputValue(raw: unknown): string {
   return raw.replace(/^\{.*?\}$/s, '').trim().slice(0, 60) || raw.slice(0, 60);
 }
 
-// Formats a single agent tool call into a clean terminal-style log line
+// Formats a single agent tool call into a clean terminal-style log line.
+// calculate_combat_score intentionally shows no input — the blob is noise.
 function formatTraceItem(item: { tool: string; input: unknown }): string {
   const label = TOOL_LABELS[item.tool] ?? item.tool.toUpperCase().replace(/_/g, ' ');
+  if (item.tool === 'calculate_combat_score') return `>> ${label}`;
   const value = extractInputValue(item.input);
   return value ? `>> ${label}: ${value}` : `>> ${label}`;
 }
@@ -684,7 +686,11 @@ export function App() {
                     </p>
                   )}
                   {liveTrace.map((item, i) => (
-                    <p key={i} className="text-phosphor text-sm leading-relaxed">
+                    <p
+                      key={i}
+                      className="trace-line text-phosphor text-sm leading-relaxed"
+                      style={{ animationDelay: `${i * 120}ms` }}
+                    >
                       {formatTraceItem(item)}
                     </p>
                   ))}

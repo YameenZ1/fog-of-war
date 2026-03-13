@@ -69,3 +69,14 @@ body {
 .section-reveal {
   animation: section-reveal 0.55s ease-out forwards;
 }
+
+/* Trace line drop-in — used for live agent tool call lines on the loading screen */
+@keyframes trace-drop {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.trace-line {
+  opacity: 0;
+  animation: trace-drop 0.35s ease-out forwards;
+}
