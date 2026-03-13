@@ -14,6 +14,9 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+## Agent trace dumps (written to disk after each analysis — not committed)
+agent/logs/
+
 ## Editor
 .vscode/
 .idea/

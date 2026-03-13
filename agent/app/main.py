@@ -26,6 +26,38 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger("fog-of-war.agent")
+
+# ── Trace log file ─────────────────────────────────────────────────────────────
+# Every completed analysis appends one JSON line to this file so the full agent
+# reasoning is persisted on disk rather than displayed (and discarded) in the UI.
+# Location: agent/logs/traces.jsonl  (created automatically on first write)
+_LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
+_TRACE_LOG = _LOGS_DIR / "traces.jsonl"
+
+
+def _write_trace_log(
+    commander1: str,
+    commander2: str,
+    theater: str,
+    trace: List[Dict[str, Any]],
+    verdict_winner: Optional[str],
+    parse_strategy: Optional[str],
+) -> None:
+    """Append a single JSONL record for this analysis to the trace log file."""
+    _LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    record = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "commander1": commander1,
+        "commander2": commander2,
+        "theater": theater,
+        "verdict_winner": verdict_winner,
+        "parse_strategy": parse_strategy,
+        "tool_calls": len(trace),
+        "trace": trace,
+    }
+    with _TRACE_LOG.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    logger.info("Trace log written → %s (%d tool calls)", _TRACE_LOG, len(trace))
 from .tools import (
     calculate_combat_score,
     get_battle_context,
@@ -496,6 +528,18 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
             "fun_fact": "",
             "_parse_error": parse_error,
         }
+
+    # ── Write full reasoning trace to disk ────────────────────────────────────
+    # The frontend no longer displays this; it lives in agent/logs/traces.jsonl
+    # where it can be inspected, grepped, or diffed at any time.
+    _write_trace_log(
+        commander1=request.commander1,
+        commander2=request.commander2,
+        theater=request.query,          # full query contains the theater context
+        trace=callback.trace,
+        verdict_winner=verdict.get("winner") if isinstance(verdict, dict) else None,
+        parse_strategy=_diagnostics.get("parse_strategy"),
+    )
 
     trace_models = [ToolCallRecord(**record) for record in callback.trace]
 

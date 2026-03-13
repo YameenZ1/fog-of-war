@@ -42,7 +42,6 @@ interface Verdict {
 
 interface AnalyzeResponse {
   verdict: Verdict;
-  thinking_trace: unknown[];
 }
 
 /* ── Constants ────────────────────────────────────────────── */
@@ -838,10 +837,6 @@ export function App() {
               </div>
             )}
 
-            {/* ── AGENT REASONING TRACE ─────────────────────────── */}
-            {assessPhase >= 3 && analysisResult && analysisResult.thinking_trace.length > 0 && (
-              <AgentTrace trace={analysisResult.thinking_trace as TraceEntry[]} />
-            )}
           </section>
         )}
       </div>
@@ -849,49 +844,3 @@ export function App() {
   );
 }
 
-/* ── Agent reasoning trace (collapsible) ─────────────────── */
-interface TraceEntry {
-  tool: string;
-  input: unknown;
-  output: unknown;
-}
-
-function AgentTrace({ trace }: { trace: TraceEntry[] }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="mt-6 border border-dashed border-phosphor/20 rounded section-reveal">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="w-full flex items-center justify-between px-4 py-3 font-terminal text-phosphor/50
-          text-xs tracking-wider hover:text-phosphor/80 hover:bg-phosphor/5 transition-all rounded"
-      >
-        <span>[ AGENT REASONING TRACE — {trace.length} TOOL CALLS ]</span>
-        <span>{open ? '▲ COLLAPSE' : '▼ EXPAND'}</span>
-      </button>
-      {open && (
-        <div className="px-4 pb-4 space-y-4 border-t border-dashed border-phosphor/15 pt-4">
-          {trace.map((entry, i) => (
-            <div key={i} className="text-xs font-terminal">
-              <p className="text-amber/80 mb-1">
-                [{String(i + 1).padStart(2, '0')}] TOOL: {entry.tool.toUpperCase()}
-              </p>
-              <p className="text-phosphor/40 mb-0.5 pl-4">INPUT:</p>
-              <pre className="text-phosphor/60 pl-4 whitespace-pre-wrap break-all leading-relaxed mb-1">
-                {typeof entry.input === 'string'
-                  ? entry.input
-                  : JSON.stringify(entry.input, null, 2)}
-              </pre>
-              <p className="text-phosphor/40 mb-0.5 pl-4">OUTPUT:</p>
-              <pre className="text-phosphor/40 pl-4 whitespace-pre-wrap break-all leading-relaxed">
-                {typeof entry.output === 'string'
-                  ? entry.output.slice(0, 400) + (entry.output.length > 400 ? '…' : '')
-                  : JSON.stringify(entry.output, null, 2).slice(0, 400)}
-              </pre>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
