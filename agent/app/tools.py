@@ -8,18 +8,9 @@ from langchain.tools import tool
 
 MCP_SERVER_URL = os.getenv("MCP_SERVER_URL", "http://localhost:8001")
 
-# Shared secret sent to the MCP server as X-API-Key on every request.
-# Must match MCP_API_KEY in the MCP server's environment.
-# If not set, the header is omitted (works when MCP server runs in dev-mode).
-_MCP_API_KEY: str = os.getenv("MCP_API_KEY", "")
-
 
 def _build_client() -> httpx.Client:
-    """Build an httpx client pre-configured with the MCP base URL and auth header."""
-    headers: Dict[str, str] = {}
-    if _MCP_API_KEY:
-        headers["X-API-Key"] = _MCP_API_KEY
-    return httpx.Client(base_url=MCP_SERVER_URL, timeout=10.0, headers=headers)
+    return httpx.Client(base_url=MCP_SERVER_URL, timeout=10.0)
 
 
 def _handle_http_error(error: Exception) -> Dict[str, Any]:

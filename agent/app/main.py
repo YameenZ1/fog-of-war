@@ -7,10 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import secrets
-
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from json_repair import repair_json
 from langchain_core.callbacks.base import BaseCallbackHandler
@@ -111,25 +109,6 @@ _diagnostics: Dict[str, Any] = {
 # NOTE: single-user dev tool only — not safe for concurrent requests.
 _live_trace: List[Dict[str, Any]] = []
 _live_trace_complete: bool = False
-
-# ── Diagnostics endpoint authentication ───────────────────────────────────────
-# Set DIAGNOSTICS_API_KEY in your .env to require X-API-Key on the /diagnostics
-# endpoints.  Leave it empty to allow unauthenticated access (dev-mode).
-# These endpoints expose raw LLM output and should be gated in production.
-_DIAGNOSTICS_API_KEY: str = os.getenv("DIAGNOSTICS_API_KEY", "")
-
-
-async def verify_diagnostics_key(x_api_key: str = Header(default="")) -> None:
-    """FastAPI dependency for the /diagnostics endpoints.
-
-    Skipped if DIAGNOSTICS_API_KEY is not configured so the default
-    dev-workflow requires no extra setup.
-    """
-    if not _DIAGNOSTICS_API_KEY:
-        return
-    if not secrets.compare_digest(x_api_key, _DIAGNOSTICS_API_KEY):
-        raise HTTPException(status_code=401, detail="Unauthorized — set X-API-Key header.")
-
 
 # ── Rate-limit tracker ─────────────────────────────────────────────────────────
 # Stores the UTC datetime of the most recent 429 / RESOURCE_EXHAUSTED error so
@@ -412,7 +391,7 @@ async def get_suggestions() -> Dict[str, Any]:
         ) from exc
 
 
-@app.get("/diagnostics/live-trace", dependencies=[Depends(verify_diagnostics_key)])
+@app.get("/diagnostics/live-trace")
 async def live_trace() -> Dict[str, Any]:
     """
     Returns the tool calls made so far in the current (or most recent) analysis.
@@ -428,7 +407,7 @@ async def live_trace() -> Dict[str, Any]:
     return {"trace": _live_trace, "complete": _live_trace_complete}
 
 
-@app.get("/diagnostics", dependencies=[Depends(verify_diagnostics_key)])
+@app.get("/diagnostics")
 async def diagnostics() -> Dict[str, Any]:
     """
     Returns metadata about the most recent /analyze call.
@@ -439,8 +418,8 @@ async def diagnostics() -> Dict[str, Any]:
       - parse_error: the exception message if parsing failed
       - tool_calls: how many MCP tools the agent invoked
 
-    Protected by DIAGNOSTICS_API_KEY when that env var is set.
-    In dev-mode (no key configured) this endpoint is open.
+    This endpoint is intentionally unauthenticated for development.
+    Remove or gate it behind an API key before any public deployment.
     """
     return _diagnostics
 
