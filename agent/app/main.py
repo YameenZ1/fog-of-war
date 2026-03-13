@@ -110,6 +110,11 @@ _diagnostics: Dict[str, Any] = {
 _live_trace: List[Dict[str, Any]] = []
 _live_trace_complete: bool = False
 
+# ── Rate-limit tracker ─────────────────────────────────────────────────────────
+# Stores the UTC datetime of the most recent 429 / RESOURCE_EXHAUSTED error so
+# the frontend briefing page can display a warning banner.
+_last_rate_limit_at: Optional[datetime] = None
+
 
 class AnalyzeRequest(BaseModel):
     query: str = Field(..., description="Natural language battle analysis query.")
@@ -291,11 +296,23 @@ async def health() -> Dict[str, Any]:
         llm_ready = False
         error_message = str(exc)
 
+    # A rate-limit counts as "recent" for 2 minutes — after that providers
+    # should have recovered and there is no need to keep warning the user.
+    rate_limited = False
+    rate_limited_ago: Optional[int] = None
+    if _last_rate_limit_at is not None:
+        seconds_ago = (datetime.now(timezone.utc) - _last_rate_limit_at).total_seconds()
+        if seconds_ago < 120:
+            rate_limited = True
+            rate_limited_ago = int(seconds_ago)
+
     return {
         "status": "ok",
         "service": "agent",
         "llm_ready": llm_ready,
         "error": error_message,
+        "rate_limited": rate_limited,
+        "rate_limited_seconds_ago": rate_limited_ago,
     }
 
 
@@ -431,10 +448,12 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
             )
         )
     except Exception as exc:  # noqa: BLE001
+        global _last_rate_limit_at  # noqa: PLW0603
         exc_str = str(exc)
         # Surface rate-limit failures with a clear, actionable message rather
         # than the raw LangChain exception which is hard to read in the UI.
         if "429" in exc_str or "RESOURCE_EXHAUSTED" in exc_str or "rate_limit" in exc_str.lower():
+            _last_rate_limit_at = datetime.now(timezone.utc)
             detail = (
                 "All LLM providers are currently rate-limited. "
                 "Wait a minute and try again, or add a new API key."

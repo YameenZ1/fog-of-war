@@ -338,6 +338,9 @@ export function App() {
   // Incrementing this key triggers a fresh suggestions fetch on each new analysis.
   const [suggestionKey, setSuggestionKey] = useState(0);
 
+  /* — Health / rate-limit banner — */
+  const [rateLimited, setRateLimited] = useState(false);
+
   /* — Gathering — */
   // Live trace items polled from GET /diagnostics/live-trace while agent is running
   const [liveTrace, setLiveTrace] = useState<{ tool: string; input: string; timestamp: string }[]>([]);
@@ -360,6 +363,22 @@ export function App() {
   const [narrativeIndex, setNarrativeIndex] = useState(0);
   const [narrativeCharIndex, setNarrativeCharIndex] = useState(0);
   const [narrativeTypeDone, setNarrativeTypeDone] = useState(false);
+
+  /* ── Health poll — checks for rate-limiting every 15s while on briefing page ── */
+  useEffect(() => {
+    if (stage !== 'briefing') return;
+    const check = () => {
+      fetch('http://localhost:8000/health')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (data) setRateLimited(data.rate_limited === true);
+        })
+        .catch(() => {}); // silently degrade — don't block the UI
+    };
+    check();
+    const interval = setInterval(check, 15_000);
+    return () => clearInterval(interval);
+  }, [stage, suggestionKey]); // re-run when user returns to briefing (suggestionKey increments)
 
   /* ── Suggestions fetch — fires on mount and each time suggestionKey changes ── */
   useEffect(() => {
@@ -564,6 +583,18 @@ export function App() {
         ══════════════════════════════════════ */}
         {stage === 'briefing' && (
           <section>
+            {/* Rate-limit warning banner — shown for ~2 min after a failed analysis */}
+            {rateLimited && (
+              <div className="mb-6 border border-dashed border-amber/60 rounded px-4 py-3
+                flex items-start gap-3 bg-amber/5">
+                <span className="text-amber text-sm shrink-0 mt-0.5">⚠</span>
+                <p className="text-amber/90 text-xs font-terminal tracking-wide leading-relaxed">
+                  LLM PROVIDERS RECENTLY RATE-LIMITED — analysis may be slower than usual.
+                  Wait ~1 min or the system will auto-retry with the next available provider.
+                </p>
+              </div>
+            )}
+
             <TextInput
               label="THEATER OF OPERATIONS:"
               value={theater}
