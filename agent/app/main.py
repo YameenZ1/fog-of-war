@@ -56,6 +56,14 @@ _diagnostics: Dict[str, Any] = {
     "llm_provider": None,     # which provider actually responded
 }
 
+# ── Live trace — updated in real-time as the agent calls tools ─────────────────
+# Cleared at the start of each /analyze call. The frontend polls
+# GET /diagnostics/live-trace every second to show real agent activity
+# on the loading screen instead of static fake messages.
+# NOTE: single-user dev tool only — not safe for concurrent requests.
+_live_trace: List[Dict[str, Any]] = []
+_live_trace_complete: bool = False
+
 
 class AnalyzeRequest(BaseModel):
     query: str = Field(..., description="Natural language battle analysis query.")
@@ -86,13 +94,16 @@ class ThinkingTraceHandler(BaseCallbackHandler):
         input_str: Any,
         **kwargs: Any,
     ) -> None:
-        self.trace.append(
-            {
-                "tool": serialized.get("name", "unknown_tool"),
-                "input": input_str,
-                "output": None,
-            }
-        )
+        entry = {
+            "tool": serialized.get("name", "unknown_tool"),
+            "input": input_str,
+            "output": None,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+        self.trace.append(entry)
+        # Also write to the global live trace so the frontend can poll it.
+        _live_trace.append(entry)
+        logger.info("Tool call: %s | input: %s", entry["tool"], str(input_str)[:120])
 
     def on_tool_end(self, output: Any, **kwargs: Any) -> None:
         # Attach the output to the most recent tool call without an output.
@@ -301,6 +312,22 @@ async def get_suggestions() -> Dict[str, Any]:
         ) from exc
 
 
+@app.get("/diagnostics/live-trace")
+async def live_trace() -> Dict[str, Any]:
+    """
+    Returns the tool calls made so far in the current (or most recent) analysis.
+
+    The frontend polls this every second during the loading screen to display
+    real agent activity — which Wikipedia endpoints were queried, what the
+    combat scorer received, etc. — instead of static fake status messages.
+
+    Fields:
+      - trace: list of { tool, input, ts } objects in call order
+      - complete: true once the /analyze request has finished
+    """
+    return {"trace": _live_trace, "complete": _live_trace_complete}
+
+
 @app.get("/diagnostics")
 async def diagnostics() -> Dict[str, Any]:
     """
@@ -328,6 +355,10 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
     technology, and civilization context, then calls the combat
     scoring endpoint and synthesizes a structured verdict.
     """
+
+    global _live_trace, _live_trace_complete  # noqa: PLW0603
+    _live_trace = []
+    _live_trace_complete = False
 
     graph = get_graph()
     callback = ThinkingTraceHandler()
@@ -368,6 +399,8 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
             status_code=500,
             detail=f"Unexpected graph output format: {exc}",
         ) from exc
+
+    _live_trace_complete = True  # signal to polling frontend that agent is done
 
     # ── Update diagnostics with raw output ────────────────────────────────────
     _diagnostics.update({

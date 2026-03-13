@@ -46,16 +46,27 @@ interface AnalyzeResponse {
 }
 
 /* ── Constants ────────────────────────────────────────────── */
-const STATUS_MESSAGES = [
-  '>> ACCESSING TACTICAL DATABASE...',
-  '>> RETRIEVING INTELLIGENCE ON: ',
-  '>> RETRIEVING INTELLIGENCE ON: ',
-  '>> ANALYZING ERA TECHNOLOGY DIFFERENTIAL...',
-  '>> CROSS-REFERENCING BATTLE RECORDS...',
-  '>> RUNNING COMBAT SIMULATION...',
-  '>> CALCULATING PROBABILITY MATRICES...',
-  '>> COMPILING FINAL ASSESSMENT...',
-];
+
+// Maps backend tool names to human-readable labels for the live trace display
+const TOOL_LABELS: Record<string, string> = {
+  get_commander_profile: 'RETRIEVING COMMANDER PROFILE',
+  search_wikipedia: 'SEARCHING TACTICAL DATABASE',
+  get_article_summary: 'ANALYZING INTELLIGENCE REPORT',
+  get_page_summary: 'READING FIELD REPORT',
+  get_battle_info: 'RETRIEVING BATTLE RECORDS',
+  wikipedia_search: 'SEARCHING WIKIPEDIA',
+  combat_score: 'CALCULATING COMBAT SCORES',
+  get_search_results: 'QUERYING INTELLIGENCE ARCHIVE',
+  search: 'SEARCHING TACTICAL DATABASE',
+};
+
+// Formats a single agent tool call into a terminal-style log line
+function formatTraceItem(item: { tool: string; input: string }): string {
+  const label = TOOL_LABELS[item.tool] ?? item.tool.toUpperCase().replace(/_/g, ' ');
+  const raw = item.input ?? '';
+  const truncated = raw.length > 70 ? raw.slice(0, 70) + '...' : raw;
+  return truncated ? `>> ${label}: ${truncated}` : `>> ${label}`;
+}
 
 const BREAKDOWN_KEYS = [
   'tactical_genius',
@@ -277,8 +288,9 @@ export function App() {
   const [suggestionKey, setSuggestionKey] = useState(0);
 
   /* — Gathering — */
-  const [statusStep, setStatusStep] = useState(0);
-  const [typewriterLen, setTypewriterLen] = useState(0);
+  // Live trace items polled from GET /diagnostics/live-trace while agent is running
+  const [liveTrace, setLiveTrace] = useState<{ tool: string; input: string; timestamp: string }[]>([]);
+  const [liveTraceComplete, setLiveTraceComplete] = useState(false);
   const [progress, setProgress] = useState(0);
   const [apiError, setApiError] = useState<string | null>(null);
   const fetchStarted = useRef(false);
@@ -319,33 +331,36 @@ export function App() {
     forceBravo.trim().length > 0 &&
     forceAlpha.trim().toLowerCase() !== forceBravo.trim().toLowerCase();
 
-  /* ── Gathering: status line typewriter ── */
-  const currentStatusMessage =
-    statusStep >= STATUS_MESSAGES.length
-      ? ''
-      : statusStep === 1
-      ? STATUS_MESSAGES[1] + forceAlpha
-      : statusStep === 2
-      ? STATUS_MESSAGES[2] + forceBravo
-      : STATUS_MESSAGES[statusStep];
-
+  /* ── Gathering: poll live agent trace every second ── */
   useEffect(() => {
     if (stage !== 'gathering' || apiError) return;
-    if (typewriterLen < currentStatusMessage.length) {
-      const t = setTimeout(() => setTypewriterLen((n) => n + 1), 9);
-      return () => clearTimeout(t);
-    }
-    const t = setTimeout(() => {
-      setTypewriterLen(0);
-      if (statusStep < STATUS_MESSAGES.length - 1) {
-        setStatusStep((s) => s + 1);
-        setProgress(((statusStep + 1) / STATUS_MESSAGES.length) * 100);
-      } else {
-        setProgress(100);
-      }
-    }, 400);
-    return () => clearTimeout(t);
-  }, [stage, statusStep, typewriterLen, currentStatusMessage.length, apiError]);
+
+    // Reset trace state at the start of each gathering phase
+    setLiveTrace([]);
+    setLiveTraceComplete(false);
+    setProgress(0);
+
+    const poll = () => {
+      fetch('http://localhost:8000/diagnostics/live-trace')
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (!data) return;
+          const items = data.trace ?? [];
+          const done: boolean = data.complete ?? false;
+          setLiveTrace(items);
+          setLiveTraceComplete(done);
+          // Drive progress bar: each tool call counts toward 90%; 100% reserved for when
+          // the API response lands and we transition to the assessment stage.
+          const estimated = Math.min(90, (items.length / 10) * 90);
+          setProgress(done ? 95 : estimated);
+        })
+        .catch(() => {}); // silently ignore — the API call effect handles real errors
+    };
+
+    poll(); // fire immediately so the screen isn't blank
+    const interval = setInterval(poll, 1000);
+    return () => clearInterval(interval);
+  }, [stage, apiError]);
 
   /* ── Gathering: fire API call ── */
   useEffect(() => {
@@ -415,8 +430,8 @@ export function App() {
   /* ── Actions ── */
   const startAnalysis = useCallback(() => {
     setStage('gathering');
-    setStatusStep(0);
-    setTypewriterLen(0);
+    setLiveTrace([]);
+    setLiveTraceComplete(false);
     setProgress(0);
     setAnalysisResult(null);
     setApiError(null);
@@ -431,8 +446,8 @@ export function App() {
     setSuggestionKey((k) => k + 1); // triggers a fresh suggestions fetch
     setAnalysisResult(null);
     setApiError(null);
-    setStatusStep(0);
-    setTypewriterLen(0);
+    setLiveTrace([]);
+    setLiveTraceComplete(false);
     setProgress(0);
     setAssessPhase(0);
     setSkipped(false);
@@ -457,13 +472,6 @@ export function App() {
   const breakdown = verdict?.score_breakdown ?? {};
   const deployment = verdict?.initial_deployment;
   const aftermath = verdict?.aftermath;
-
-  const getStatusLine = (i: number) =>
-    i === 1
-      ? STATUS_MESSAGES[1] + forceAlpha
-      : i === 2
-      ? STATUS_MESSAGES[2] + forceBravo
-      : STATUS_MESSAGES[i] ?? '';
 
   const terrainLabel =
     deployment?.terrain_advantage === 'commander1'
@@ -570,19 +578,26 @@ export function App() {
                 <h2 className="text-amber text-lg mb-4 tracking-wider">
                   RETRIEVING FIELD INTELLIGENCE...
                 </h2>
-                <div className="space-y-2 mb-6 min-h-[240px]">
-                  {Array.from({ length: statusStep + 1 }).map((_, i) => (
-                    <p key={i} className="text-phosphor text-sm">
-                      {i < statusStep ? (
-                        getStatusLine(i)
-                      ) : (
-                        <>
-                          {currentStatusMessage.slice(0, typewriterLen)}
-                          <span className="typewriter-cursor" />
-                        </>
-                      )}
+                {/* Live agent activity feed — shows real tool calls as they happen */}
+                <div className="space-y-1 mb-6 min-h-[240px] overflow-y-auto max-h-[300px]">
+                  {liveTrace.length === 0 && (
+                    <p className="text-phosphor/50 text-sm">
+                      &gt;&gt; INITIALIZING TACTICAL ANALYSIS...
+                      <span className="typewriter-cursor" />
+                    </p>
+                  )}
+                  {liveTrace.map((item, i) => (
+                    <p key={i} className="text-phosphor text-sm leading-relaxed">
+                      {formatTraceItem(item)}
                     </p>
                   ))}
+                  {/* Pulsing "awaiting" line shown while agent is still working */}
+                  {!liveTraceComplete && liveTrace.length > 0 && (
+                    <p className="text-phosphor/50 text-sm">
+                      &gt;&gt; AWAITING NEXT TRANSMISSION...
+                      <span className="typewriter-cursor" />
+                    </p>
+                  )}
                 </div>
                 <div className="mb-4">
                   <div className="h-2 border border-dashed border-phosphor/70 rounded overflow-hidden bg-war-bg">
