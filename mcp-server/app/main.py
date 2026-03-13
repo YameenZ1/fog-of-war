@@ -1,12 +1,37 @@
+import os
+import secrets
 from typing import List, Optional
 
 import httpx
-from fastapi import FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, Header, HTTPException, status
 from pydantic import BaseModel, Field
 from urllib.parse import quote
 
 
 WIKIPEDIA_API_BASE = "https://en.wikipedia.org/api/rest_v1"
+
+# ── Shared-secret authentication ──────────────────────────────────────────────
+# Set MCP_API_KEY in your .env to require all callers to present the same
+# secret in the X-API-Key request header.  If the variable is not set (or
+# empty) the server runs in unauthenticated dev-mode and logs a warning.
+_MCP_API_KEY: str = os.getenv("MCP_API_KEY", "")
+
+
+async def verify_api_key(x_api_key: str = Header(default="")) -> None:
+    """FastAPI dependency that enforces the shared MCP secret.
+
+    Uses ``secrets.compare_digest`` for constant-time comparison so the
+    check is not vulnerable to timing attacks.  Authentication is skipped
+    entirely when MCP_API_KEY is not configured (dev-mode).
+    """
+    if not _MCP_API_KEY:
+        # No key configured — allow all requests but warn once at startup.
+        return
+    if not secrets.compare_digest(x_api_key, _MCP_API_KEY):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing X-API-Key header.",
+        )
 
 
 app = FastAPI(
@@ -148,6 +173,19 @@ def _extract_first_year(text: str) -> Optional[int]:
     return int(match.group(0)) if match else None
 
 
+@app.on_event("startup")
+async def _startup_security_check() -> None:
+    import logging
+    log = logging.getLogger("fog-of-war.mcp-server")
+    if not _MCP_API_KEY:
+        log.warning(
+            "MCP_API_KEY is not set — running in unauthenticated dev-mode. "
+            "Set MCP_API_KEY in .env before deploying."
+        )
+    else:
+        log.info("MCP_API_KEY is configured — API key authentication is active.")
+
+
 @app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
     """
@@ -160,7 +198,7 @@ async def health() -> HealthResponse:
     return HealthResponse(status="ok", service="mcp-server")
 
 
-@app.get("/commander/{name}", response_model=CommanderResponse)
+@app.get("/commander/{name}", response_model=CommanderResponse, dependencies=[Depends(verify_api_key)])
 async def get_commander(name: str) -> CommanderResponse:
     """
     Look up a military commander on Wikipedia and return structured details.
@@ -224,7 +262,7 @@ async def get_commander(name: str) -> CommanderResponse:
     )
 
 
-@app.get("/battle/{name}", response_model=BattleResponse)
+@app.get("/battle/{name}", response_model=BattleResponse, dependencies=[Depends(verify_api_key)])
 async def get_battle(name: str) -> BattleResponse:
     """
     Look up a specific battle on Wikipedia and return structured details.
@@ -288,7 +326,7 @@ async def get_battle(name: str) -> BattleResponse:
     )
 
 
-@app.get("/era-technology/{era}", response_model=EraTechnologyResponse)
+@app.get("/era-technology/{era}", response_model=EraTechnologyResponse, dependencies=[Depends(verify_api_key)])
 async def get_era_technology(era: str) -> EraTechnologyResponse:
     """
     Look up military technology for a given era or civilization on Wikipedia.
@@ -354,7 +392,7 @@ async def get_era_technology(era: str) -> EraTechnologyResponse:
     )
 
 
-@app.get("/civilization/{name}", response_model=CivilizationResponse)
+@app.get("/civilization/{name}", response_model=CivilizationResponse, dependencies=[Depends(verify_api_key)])
 async def get_civilization(name: str) -> CivilizationResponse:
     """
     Look up a civilization or empire at its peak on Wikipedia.
@@ -449,7 +487,7 @@ def _compute_commander_score(attrs: CommanderAttributes) -> float:
     return round(score * 10.0, 2)
 
 
-@app.post("/combat-score", response_model=CombatScoreResponse)
+@app.post("/combat-score", response_model=CombatScoreResponse, dependencies=[Depends(verify_api_key)])
 async def combat_score(payload: CombatScoreRequest) -> CombatScoreResponse:
     """
     Compute weighted combat scores for two commanders and declare a winner.
