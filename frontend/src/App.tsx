@@ -48,23 +48,75 @@ interface AnalyzeResponse {
 
 // Maps backend tool names to human-readable labels for the live trace display
 const TOOL_LABELS: Record<string, string> = {
-  get_commander_profile: 'RETRIEVING COMMANDER PROFILE',
-  search_wikipedia: 'SEARCHING TACTICAL DATABASE',
-  get_article_summary: 'ANALYZING INTELLIGENCE REPORT',
-  get_page_summary: 'READING FIELD REPORT',
-  get_battle_info: 'RETRIEVING BATTLE RECORDS',
-  wikipedia_search: 'SEARCHING WIKIPEDIA',
-  combat_score: 'CALCULATING COMBAT SCORES',
-  get_search_results: 'QUERYING INTELLIGENCE ARCHIVE',
-  search: 'SEARCHING TACTICAL DATABASE',
+  // actual tool names used by the agent
+  get_commander_profile:  'RETRIEVING COMMANDER PROFILE',
+  get_battle_context:     'RETRIEVING BATTLE RECORDS',
+  get_era_technology:     'ACCESSING ERA TECHNOLOGY',
+  get_civilization_stats: 'ANALYZING CIVILIZATION DATA',
+  calculate_combat_score: 'CALCULATING COMBAT SCORE',
+  // legacy / alternative names kept for safety
+  search_wikipedia:       'SEARCHING TACTICAL DATABASE',
+  get_article_summary:    'ANALYZING INTELLIGENCE REPORT',
+  get_page_summary:       'READING FIELD REPORT',
+  get_battle_info:        'RETRIEVING BATTLE RECORDS',
+  wikipedia_search:       'SEARCHING WIKIPEDIA',
+  combat_score:           'CALCULATING COMBAT SCORES',
+  get_search_results:     'QUERYING INTELLIGENCE ARCHIVE',
+  search:                 'SEARCHING TACTICAL DATABASE',
 };
 
-// Formats a single agent tool call into a terminal-style log line
-function formatTraceItem(item: { tool: string; input: string }): string {
+/**
+ * Extracts a clean display value from a tool input.
+ *
+ * The backend stores the raw LangChain `input_str`, which may arrive as:
+ *  - a proper JSON object  →  {"name": "Julius Caesar"}
+ *  - a Python-repr string  →  {'name': 'Julius Caesar'}   (single quotes)
+ *  - a plain string
+ *
+ * We want to show only the meaningful value — e.g. "Julius Caesar" — not
+ * the whole dict wrapper.
+ */
+function extractInputValue(raw: unknown): string {
+  if (raw === null || raw === undefined) return '';
+
+  // If it's already an object (JSON-deserialized by the browser), read it directly.
+  if (typeof raw === 'object' && !Array.isArray(raw)) {
+    const obj = raw as Record<string, unknown>;
+    if ('name' in obj)  return String(obj.name);
+    if ('era'  in obj)  return String(obj.era);
+    if ('data' in obj)  {
+      // calculate_combat_score passes a long JSON blob — show a short stub
+      return 'COMBAT DATA...';
+    }
+    return Object.values(obj).map(String).join(', ').slice(0, 60);
+  }
+
+  if (typeof raw !== 'string') return String(raw).slice(0, 60);
+
+  // Try to parse the string — first as JSON, then as Python repr (single → double quotes)
+  for (const attempt of [raw, raw.replace(/'/g, '"')]) {
+    try {
+      const parsed = JSON.parse(attempt) as unknown;
+      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+        const obj = parsed as Record<string, unknown>;
+        if ('name' in obj)  return String(obj.name);
+        if ('era'  in obj)  return String(obj.era);
+        if ('data' in obj)  return 'COMBAT DATA...';
+        return Object.values(obj).map(String).join(', ').slice(0, 60);
+      }
+      if (typeof parsed === 'string') return parsed.slice(0, 60);
+    } catch { /* try next */ }
+  }
+
+  // Fall back to the raw string, stripping any wrapping braces/quotes
+  return raw.replace(/^\{.*?\}$/s, '').trim().slice(0, 60) || raw.slice(0, 60);
+}
+
+// Formats a single agent tool call into a clean terminal-style log line
+function formatTraceItem(item: { tool: string; input: unknown }): string {
   const label = TOOL_LABELS[item.tool] ?? item.tool.toUpperCase().replace(/_/g, ' ');
-  const raw = item.input ?? '';
-  const truncated = raw.length > 70 ? raw.slice(0, 70) + '...' : raw;
-  return truncated ? `>> ${label}: ${truncated}` : `>> ${label}`;
+  const value = extractInputValue(item.input);
+  return value ? `>> ${label}: ${value}` : `>> ${label}`;
 }
 
 const BREAKDOWN_KEYS = [
@@ -374,8 +426,16 @@ export function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, commander1: forceAlpha, commander2: forceBravo }),
     })
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}: ${r.statusText}`);
+      .then(async (r) => {
+        if (!r.ok) {
+          // Try to read the FastAPI error detail from the response body
+          let detail = `HTTP ${r.status}`;
+          try {
+            const body = await r.json() as { detail?: string };
+            if (body?.detail) detail = body.detail;
+          } catch { /* body wasn't JSON — keep the generic message */ }
+          throw new Error(detail);
+        }
         return r.json();
       })
       .then((data: AnalyzeResponse) => {

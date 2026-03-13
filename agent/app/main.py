@@ -431,10 +431,17 @@ async def analyze(request: AnalyzeRequest) -> AnalyzeResponse:
             )
         )
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error while running analysis agent: {exc}",
-        ) from exc
+        exc_str = str(exc)
+        # Surface rate-limit failures with a clear, actionable message rather
+        # than the raw LangChain exception which is hard to read in the UI.
+        if "429" in exc_str or "RESOURCE_EXHAUSTED" in exc_str or "rate_limit" in exc_str.lower():
+            detail = (
+                "All LLM providers are currently rate-limited. "
+                "Wait a minute and try again, or add a new API key."
+            )
+        else:
+            detail = f"Agent error: {exc_str[:300]}"
+        raise HTTPException(status_code=500, detail=detail) from exc
 
     try:
         # LangGraph ReAct agent returns a state dict with "messages".
