@@ -35,6 +35,20 @@ _LOGS_DIR = Path(__file__).resolve().parent.parent / "logs"
 _TRACE_LOG = _LOGS_DIR / "traces.jsonl"
 
 
+def _sanitize_for_json(obj: Any) -> Any:
+    """Recursively convert LangChain message objects (and any other non-JSON-
+    serializable values) to plain strings so json.dumps never raises TypeError."""
+    if isinstance(obj, (str, int, float, bool)) or obj is None:
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize_for_json(v) for v in obj]
+    # LangChain BaseMessage subclasses (ToolMessage, AIMessage, etc.) and any
+    # other non-primitive — convert to their string representation.
+    return str(obj)
+
+
 def _write_trace_log(
     commander1: str,
     commander2: str,
@@ -53,7 +67,7 @@ def _write_trace_log(
         "verdict_winner": verdict_winner,
         "parse_strategy": parse_strategy,
         "tool_calls": len(trace),
-        "trace": trace,
+        "trace": _sanitize_for_json(trace),   # coerce ToolMessage → str
     }
     with _TRACE_LOG.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(record, ensure_ascii=False) + "\n")
