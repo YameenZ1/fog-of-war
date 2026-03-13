@@ -583,17 +583,24 @@ export function App() {
         ══════════════════════════════════════ */}
         {stage === 'briefing' && (
           <section>
-            {/* Rate-limit warning banner — shown for ~2 min after a failed analysis */}
-            {rateLimited && (
-              <div className="mb-6 border border-dashed border-amber/60 rounded px-4 py-3
-                flex items-start gap-3 bg-amber/5">
-                <span className="text-amber text-sm shrink-0 mt-0.5">⚠</span>
-                <p className="text-amber/90 text-xs font-terminal tracking-wide leading-relaxed">
-                  LLM PROVIDERS RECENTLY RATE-LIMITED — analysis may be slower than usual.
-                  Wait ~1 min or the system will auto-retry with the next available provider.
-                </p>
-              </div>
-            )}
+            {/* System status label — live indicator above the form */}
+            <div className="mb-5 flex items-center gap-2">
+              {rateLimited ? (
+                <>
+                  <span className="inline-block w-2 h-2 rounded-full bg-terminal-red shadow-[0_0_6px_rgba(255,50,50,0.8)] animate-pulse" />
+                  <span className="font-terminal text-xs tracking-widest text-terminal-red">
+                    SYSTEM DEACTIVATED — ALL LLM PROVIDERS CURRENTLY RATE-LIMITED
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="inline-block w-2 h-2 rounded-full bg-phosphor shadow-glow animate-pulse" />
+                  <span className="font-terminal text-xs tracking-widest text-phosphor/70">
+                    SYSTEM ACTIVE
+                  </span>
+                </>
+              )}
+            </div>
 
             <TextInput
               label="THEATER OF OPERATIONS:"
@@ -643,8 +650,8 @@ export function App() {
             </TextInput>
 
             <div className="mt-8 flex justify-center">
-              <KeyButton onClick={startAnalysis} disabled={!allValid}>
-                [ INITIATE TACTICAL ANALYSIS ]
+              <KeyButton onClick={startAnalysis} disabled={!allValid || rateLimited}>
+                {rateLimited ? '[ SYSTEM DEACTIVATED ]' : '[ INITIATE TACTICAL ANALYSIS ]'}
               </KeyButton>
             </div>
           </section>
